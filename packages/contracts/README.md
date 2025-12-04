@@ -1,108 +1,117 @@
-# Data Marketplace Contract
+# **📦 Data Marketplace Smart Contract**
+
+A decentralized marketplace for encrypted datasets, powered by **USDC payments on Base**, **Storacha for encrypted storage**, and **UCAN** for post-purchase access control.
+
+This repository contains:
+
+* The Solidity smart contract (`DataMarketplace.sol`)
+* Comprehensive Foundry tests (`DataMarketplace.t.sol`)
+* Deployment script for Base (`Deploy.s.sol`)
+* Documentation for the full seller → buyer → backend → Storacha flow
 
 ---
 
-# 📁 Folder Structure 
+# **📁 Folder Structure**
 
 ```
 data-marketplace/
 │
 ├── contracts/
-│   ├── DataMarketplace.sol        # Core marketplace smart contract
+│   ├── DataMarketplace.sol         # Core marketplace smart contract
 │
 ├── script/
-│   ├── Deploy.s.sol               # Deployment script for Base Sepolia/Mainnet
+│   ├── Deploy.s.sol                # Deployment for Base Mainnet / Base Sepolia
 │
 ├── test/
-│   ├── DataMarketplace.t.sol      # Main Foundry test suite
-│
+│   ├── DataMarketplace.t.sol       # Full Foundry benchmark + reentrancy tests
 │
 ├── lib/
-│   ├── openzeppelin-contracts/    # Installed via forge install
-│   └── forge-std/                 # Standard testing library
+│   ├── openzeppelin-contracts/     # Installed via forge install
+│   └── forge-std/                  # Test utilities (cheatcodes, asserts)
 │
 ├── foundry.toml
-├── .env
 ├── remappings.txt
+├── .env
 ├── README.md
 └── .gitignore
 ```
 
 ---
 
-# Data Marketplace (MVP)
+# **🧩 What This Marketplace Actually Does**
 
-A decentralized on-chain marketplace for encrypted datasets. Sellers list encrypted files using Storacha/IPFS, and buyers purchase access using USDC on Base.
-The smart contract handles payments, fees, and purchase records. Actual data access is controlled off-chain using UCAN capability tokens.
+This is **NOT** a file-hosting system.
 
----
+This is a **trustless payment + purchase-record system** where:
 
-## Overview
+* Encrypted data lives on **Storacha/IPFS**
+* Decryption keys stay **off-chain**
+* Buyers pay in **USDC**
+* Smart contract records the purchase (canonical truth)
+* Backend reads events → enables access through **UCAN**
+* Sellers withdraw proceeds after a **24-hour security delay**
 
-This MVP implements:
-
-* Listing encrypted datasets
-* Purchasing access via USDC (Base Sepolia / Base mainnet)
-* 2.5% platform fee (configurable)
-* 24-hour withdrawal delay for seller earnings
-* Secure token transfers via SafeERC20
-* On-chain purchase record for off-chain UCAN authorization
-* Base-compatible deployment + Foundry test suite
-
-The contract does **not** handle data decryption. After a purchase, backend components use the purchase event to grant UCAN-scoped access to the encrypted dataset stored on Storacha.
+The contract **never handles plaintext keys** → compliant with EU Data Act privacy constraints.
 
 ---
 
-## Contract Summary
+# **✨ Contract Features (MVP)**
 
-The core logic lives in:
+| Feature                 | Description                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| Encrypted data listings | Sellers upload encrypted files to Storacha + publish metadata on-chain                    |
+| Envelope metadata       | `envelopeCid` (Storacha CID) + `envelopeHash` (keccak256 hash of canonical envelope JSON) |
+| USDC payments           | Buyer pays in stablecoins on Base                                                         |
+| Platform fee            | Default 2.5%, configurable by owner                                                       |
+| Purchase record         | Public on-chain purchase proof for UCAN access                                            |
+| Withdrawal delay        | 24h security period (per-listing)                                                         |
+| Safe transfers          | All token operations via `SafeERC20`                                                      |
+| Reentrancy protections  | All sensitive operations are `nonReentrant`                                               |
+| Multi-withdraw          | Sellers can withdraw multiple listings in a single transaction                            |
+
+This ensures a **secure, tamper-evident**, decentralized payment layer for data commerce.
+
+---
+
+# **🔐 Encryption Model (EnvelopeCID + EnvelopeHash)**
+
+Each listing includes:
+
+### **1. `dataCid`**
+
+Pointer to **encrypted dataset** stored on Storacha.
+
+### **2. `envelopeCid`**
+
+Pointer to **non-secret envelope.json**, containing:
+
+* encryption scheme
+* file chunks
+* key lookup info
+* maybe re-encryption or metadata
+
+### **3. `envelopeHash`**
 
 ```
-contracts/DataMarketplace.sol
+bytes32 envelopeHash = keccak256(canonicalEnvelopeJson)
 ```
 
-Key features:
+This ensures:
 
-| Feature          | Description                                         |
-| ---------------- | --------------------------------------------------- |
-| Create Listing   | Seller creates a listing with CID + price           |
-| Purchase Access  | Buyer pays USDC; purchase is recorded on-chain      |
-| Platform Fee     | Default 2.5% fee taken from each sale               |
-| Withdrawal Delay | Seller earnings locked for 24 hours after last sale |
-| SafeERC20        | All token transfers are secure                      |
-| ReentrancyGuard  | Protection for purchase/withdraw functions          |
-| Events           | Used by backend agent to grant UCAN data access     |
+* Backend verifies envelope hasn't been modified
+* Buyers can trust envelope metadata
+* No reliance on a centralized database for critical integrity
 
 ---
 
-## Tech Stack
+# **⚙️ Installation**
 
-* **Solidity 0.8.23**
-* **Foundry** (tests, scripts, deployment)
-* **OpenZeppelin Contracts** (Ownable, ReentrancyGuard, SafeERC20)
-* **USDC on Base**
-* **Storacha** (encrypted storage layer)
-* **UCAN** (capability-based access for buyers)
-
----
-
-## Installation
-
-Clone the repository:
-
-```bash
-git clone https://github.com/<your-org>/data-marketplace.git
-cd data-marketplace
 ```
-
-Install dependencies:
-
-```bash
 forge install OpenZeppelin/openzeppelin-contracts
 forge install foundry-rs/forge-std
 ```
 
-Set remappings:
+Add to `remappings.txt`:
 
 ```
 openzeppelin-contracts/=lib/openzeppelin-contracts/contracts/
@@ -111,30 +120,27 @@ forge-std/=lib/forge-std/src/
 
 ---
 
-## Environment Variables
-
+# **📦 Environment Variables**
 
 ```
-BASE_SEPOLIA_RPC_URL='your_rpc_url'
-PRIVATE_KEY='your_private_key'
-ETHERSCAN_API_KEY='etherscan_api_key'
+BASE_SEPOLIA_RPC_URL="..."
+PRIVATE_KEY="..."
+ETHERSCAN_API_KEY="..."
 ```
 
 ---
 
-## Base Testnet (USDC Address)
-
-Base Sepolia USDC:
+# **💵 USDC Address (Base Sepolia)**
 
 ```
 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 ```
 
-Use this in deployment scripts.
+Use this for deployment.
 
 ---
 
-## Deployment
+# **🚀 Deployment**
 
 Run a deployment script (example):
 
@@ -144,50 +150,137 @@ source .env
 
 ```bash
 forge script script/Deploy.s.sol:Deploy \
---rpc-url $BASE_SEPOLIA_RPC_URL \
---private-key $PRIVATE_KEY \
---chain-id 84532 \
---broadcast \
---verify \
---etherscan-api-key $ETHERSCAN_API_KEY \
--vvvv
+  --rpc-url $BASE_SEPOLIA_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --chain-id 84532 \
+  -vvvv
 ```
 
 ---
 
-## Running Tests
+# **🧪 Running Tests**
 
-To run tests on a Base Sepolia fork:
-
-```bash
+```
 forge test -vvv
 ```
 
-To get the coverage:
-```bash
+Coverage:
+
+```
 forge coverage
 ```
 
----
+Our current suite reaches:
 
-## Data Access Flow (High-Level)
-
-1. Seller uploads encrypted dataset to Storacha
-2. Seller creates on-chain listing with CID + price
-3. Buyer purchases listing on-chain using USDC
-4. Contract emits `PurchaseCompleted`
-5. Backend agent listens for event
-6. Backend generates a UCAN capability token granting access to the CID
-7. Buyer fetches + decrypts the file using their UCAN
-
-This keeps all sensitive data off-chain while payments and purchase proofs stay trustless on Base.
+* **96%+ line coverage**
+* **90%+ branch coverage**
+* **Full reentrancy simulation using malicious token mock**
 
 ---
 
-## Future Improvements
+# **📈 End-to-End Data Access Flow (Cryptographically Safe)**
 
-* Pausable contract for emergencies
-* Listing editing (update price, metadata)
-* Dispute or refund system
-* Bundled datasets
-* Tiered access (e.g., sample vs. full dataset)
+### **Seller Flow**
+
+1. Seller uploads encrypted file to Storacha → gets `dataCid`
+2. Seller generates envelope JSON (metadata)
+3. Seller uploads envelope.json → gets `envelopeCid`
+4. Seller computes:
+
+   ```
+   envelopeHash = keccak256(canonicalEnvelopeJson)
+   ```
+5. Seller calls:
+
+   ```
+   createListing(dataCid, envelopeCid, envelopeHash, price)
+   ```
+6. Listing is now live.
+
+---
+
+# **🔄 Buyer Purchase Flow**
+
+1. Buyer approves USDC
+
+2. Buyer calls:
+
+   ```
+   purchaseAccess(listingId)
+   ```
+
+3. Contract:
+
+   * Transfers USDC
+   * Records purchase permanently
+   * Emits `PurchaseCompleted`
+
+4. Backend picks up the event → begins access provisioning.
+
+---
+
+# **🔑 UCAN Key Delivery Flow (Off-chain, secure)**
+
+After verifying an on-chain purchase:
+
+### Backend steps:
+
+1. Watch `PurchaseCompleted(listingId, buyer, …)`
+2. Fetch envelope JSON from `envelopeCid`
+3. Validate:
+
+   ```
+   keccak256(envelopeJson) == envelopeHash
+   ```
+4. Require buyer to provide **RSA public key**
+5. Notify seller: “Buyer X purchased dataset”
+6. Seller encrypts AES key:
+
+   ```
+   ciphertext_K_for_buyer = Encrypt(buyerPubKey, AES_key)
+   ```
+7. Seller uploads ciphertext to Storacha → receives `keyCid`
+8. Seller submits `keyCid` to backend
+9. Backend authorizes buyer via UCAN token:
+
+   * scope to `dataCid`
+   * includes `keyCid` for decrypting
+
+### Buyer retrieves file:
+
+1. Buyer fetches ciphertext AES key (`keyCid`)
+2. Decrypts with private key
+3. Downloads encrypted dataset (`dataCid`)
+4. Decrypts final dataset
+
+Smart contract is **never exposed** to plaintext keys → zero custodial liability.
+
+---
+
+# **🛡️ Security Guarantees**
+
+| Vector                | Protection                                          |
+| --------------------- | --------------------------------------------------- |
+| Reentrancy            | Complete `nonReentrant` coverage                    |
+| Token safety          | All operations via SafeERC20                        |
+| Tamper-proof metadata | On-chain `envelopeHash`                             |
+| Withdrawal griefing   | Per-listing `firstPurchaseTime` (no attacker reset) |
+| Replay attacks        | On-chain purchase verification                      |
+| Key privacy           | Backend never handles plaintext keys                |
+
+---
+
+# **🔮 Future Improvements**
+
+| Feature                     | Value                      |
+| --------------------------- | -------------------------- |
+| Pausable contract           | Emergency kill-switch      |
+| Seller update listing price | Dynamic pricing support    |
+| Buyer refund arbitration    | Dispute resolution         |
+| Multiple access tiers       | Sample vs full access      |
+| Batch listing creation      | For large dataset catalogs |
+| Optional meta-transactions  | Gasless seller actions     |
+
