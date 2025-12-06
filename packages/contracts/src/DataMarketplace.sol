@@ -72,6 +72,7 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
         address indexed seller,
         string dataCid,
         string envelopeCid,
+        bytes32 envelopeHash,
         uint256 priceUsdc
     );
 
@@ -84,7 +85,7 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
         uint256 amountUsdc
     );
 
-    event Withdrawal(address indexed seller, uint256 amountUsdc);
+    event Withdrawal(uint256 indexed listingId, address indexed seller, uint256 amountUsdc);
 
     event PlatformFeesWithdrawn(address indexed operator, uint256 amountUsdc);
 
@@ -135,7 +136,8 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
             salesCount: 0
         });
 
-        emit ListingCreated(id, msg.sender, _dataCid, _envelopeCid, _priceUsdc);
+        // emit envelopeHash so backend indexer gets it directly from event
+        emit ListingCreated(id, msg.sender, _dataCid, _envelopeCid, _envelopeHash, _priceUsdc);
         return id;
     }
 
@@ -156,10 +158,6 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
 
     /* ========== PURCHASE FLOW ========== */
 
-    /**
-     * @notice Purchase access to a listing. Buyer must approve USDC for this contract.
-     * @param _listingId id of listing to purchase
-     */
     function purchaseAccess(uint256 _listingId) external nonReentrant {
         Listing storage l = listings[_listingId];
         require(l.seller != address(0), "LISTING_NOT_FOUND");
@@ -170,19 +168,15 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
         uint256 price = l.priceUsdc;
         require(price > 0, "INVALID_PRICE");
 
-        // Calculate platform fee and seller amount
         uint256 fee = (price * platformFeeBps) / BPS_DENOM;
         uint256 sellerAmount = price - fee;
 
-        // Transfer full price from buyer to this contract
         USDC.safeTransferFrom(msg.sender, address(this), price);
 
-        // Update balances: platform and per-listing
         platformBalance += fee;
 
         ListingBalance storage lb = listingBalances[_listingId];
         if (lb.amount == 0) {
-            // first pending sale for this listing starts the withdrawal clock
             lb.firstPurchaseTime = block.timestamp;
         }
         lb.amount += sellerAmount;
@@ -195,10 +189,6 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
 
     /* ========== WITHDRAWALS ========== */
 
-    /**
-     * @notice Withdraw accumulated listing earnings for a specific listing.
-     * @param _listingId listing to withdraw earnings for (only listing seller)
-     */
     function withdrawEarnings(uint256 _listingId) external nonReentrant {
         Listing storage l = listings[_listingId];
         require(l.seller != address(0), "LISTING_NOT_FOUND");
@@ -218,13 +208,9 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
 
         // interactions
         USDC.safeTransfer(msg.sender, amount);
-        emit Withdrawal(msg.sender, amount);
+        emit Withdrawal(_listingId, msg.sender, amount); // per-listing event
     }
 
-    /**
-     * @notice Batch withdraw across multiple listings owned by the caller.
-     * @param _listingIds array of listing ids to withdraw for
-     */
     function withdrawMultiple(uint256[] calldata _listingIds) external nonReentrant {
         uint256 total = 0;
         for (uint256 i = 0; i < _listingIds.length; ++i) {
@@ -238,21 +224,21 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
                 continue;
             }
             if (block.timestamp >= lb.firstPurchaseTime + WITHDRAWAL_DELAY) {
-                total += lb.amount;
+                uint256 amt = lb.amount;
+                total += amt;
                 lb.amount = 0;
                 lb.firstPurchaseTime = 0;
+
+                // emit per-listing withdrawal so backend can index which listing was cleared
+                emit Withdrawal(id, msg.sender, amt);
             }
         }
         require(total > 0, "NO_ELIGIBLE_BALANCE");
         USDC.safeTransfer(msg.sender, total);
-        emit Withdrawal(msg.sender, total);
     }
 
     /* ========== PLATFORM ADMIN ========== */
 
-    /**
-     * @notice Withdraw platform accumulated fees to the owner.
-     */
     function withdrawPlatformFees() external onlyOwner nonReentrant {
         uint256 bal = platformBalance;
         require(bal > 0, "NO_PLATFORM_FEES");
@@ -261,10 +247,6 @@ contract DataMarketplace is ReentrancyGuard, Ownable {
         emit PlatformFeesWithdrawn(msg.sender, bal);
     }
 
-    /**
-     * @notice Set platform fee (bps). Only owner. Capped by MAX_FEE_BPS.
-     * @param _newFeeBps new fee in basis points
-     */
     function setFee(uint256 _newFeeBps) external onlyOwner {
         require(_newFeeBps <= MAX_FEE_BPS, "FEE_TOO_HIGH");
         uint256 old = platformFeeBps;

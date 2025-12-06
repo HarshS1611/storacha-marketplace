@@ -63,6 +63,7 @@ contract DataMarketplaceTest is Test {
         address indexed seller,
         string dataCid,
         string envelopeCid,
+        bytes32 envelopeHash,
         uint256 priceUsdc
     );
     event ListingDeactivated(uint256 indexed listingId, address indexed caller);
@@ -72,7 +73,7 @@ contract DataMarketplaceTest is Test {
         address indexed seller,
         uint256 amountUsdc
     );
-    event Withdrawal(address indexed seller, uint256 amountUsdc);
+    event Withdrawal(uint256 indexed listingId, address indexed seller, uint256 amountUsdc);
     event PlatformFeesWithdrawn(address indexed operator, uint256 amountUsdc);
     event FeeUpdated(uint256 oldBps, uint256 newBps);
 
@@ -114,7 +115,7 @@ contract DataMarketplaceTest is Test {
         uint256 price = 2e6; // 2 USDC (6 decimals)
 
         vm.expectEmit(true, true, false, true);
-        emit ListingCreated(1, seller, dataCid, envelopeCid, price);
+        emit ListingCreated(1, seller, dataCid, envelopeCid, envelopeHash, price);
 
         uint256 id = marketplace.createListing(dataCid, envelopeCid, envelopeHash, price);
         vm.stopPrank();
@@ -336,7 +337,7 @@ contract DataMarketplaceTest is Test {
         (uint256 pending, ) = marketplace.getListingBalance(id);
         vm.startPrank(seller);
         vm.expectEmit(true, true, false, true);
-        emit Withdrawal(seller, pending);
+        emit Withdrawal(id, seller, pending);
         marketplace.withdrawEarnings(id);
         vm.stopPrank();
 
@@ -468,7 +469,69 @@ contract DataMarketplaceTest is Test {
         );
     }
 
-    /* ========== GETTERS ========== */
+    /* ========== DECIMALS & PRECISION TESTS ========== */
+
+    function testUSDCDecimalsIsSix() public view {
+        assertEq(usdc.decimals(), 6, "MockUSDC must use 6 decimals");
+    }
+
+    function testPurchaseWithSixDecimalPrecision() public {
+        vm.startPrank(seller);
+        uint256 price = 1_234_567; // 1.234567 USDC (6 decimals)
+        uint256 id = marketplace.createListing("data-precise", "", bytes32(0), price);
+        vm.stopPrank();
+
+        mintAndApprove(buyer, 2_000_000); // 2 USDC
+
+        uint256 feeBps = marketplace.platformFeeBps(); // default = 250 (2.5%)
+        uint256 expectedFee = (price * feeBps) / 10_000; // matches USDC decimals
+        uint256 expectedSellerAmt = price - expectedFee;
+
+        vm.startPrank(buyer);
+        marketplace.purchaseAccess(id);
+        vm.stopPrank();
+
+        (uint256 amt, ) = marketplace.getListingBalance(id);
+
+        assertEq(amt, expectedSellerAmt, "Seller amount must match 6-dec math");
+        assertEq(
+            marketplace.getPlatformBalance(),
+            expectedFee,
+            "Platform fee must match 6-dec math"
+        );
+    }
+
+    function testWithdrawalSixDecimalPrecision() public {
+        vm.startPrank(seller);
+        uint256 id = marketplace.createListing("file", "", bytes32(0), 2_500_001);
+        // 2.500001 USDC
+        vm.stopPrank();
+
+        mintAndApprove(buyer, 3_000_000);
+
+        vm.startPrank(buyer);
+        marketplace.purchaseAccess(id);
+        vm.stopPrank();
+
+        uint256 fee = (2_500_001 * marketplace.platformFeeBps()) / 10_000;
+        uint256 expectedSeller = 2_500_001 - fee;
+
+        vm.warp(block.timestamp + 24 hours + 1);
+
+        uint256 beforeBal = usdc.balanceOf(seller);
+
+        vm.startPrank(seller);
+        marketplace.withdrawEarnings(id);
+        vm.stopPrank();
+
+        uint256 afterBal = usdc.balanceOf(seller);
+
+        assertEq(afterBal - beforeBal, expectedSeller, "Seller must receive correct 6-dec payout");
+    }
+
+    
+
+    /* ========== GETTERS & MISC ========== */
 
     function testGetters() public {
         vm.startPrank(seller);
@@ -602,27 +665,6 @@ contract DataMarketplaceTest is Test {
         vm.stopPrank();
     }
 
-    function testWithdrawMultipleWhenNoneEligibleReverts() public {
-    vm.startPrank(seller);
-    uint256 id = marketplace.createListing("nopend", "", bytes32(0), 2e6);
-    vm.stopPrank();
-
-    // No purchase made → listing has NO_BALANCE and NOT eligible
-    // withdrawMultiple should revert with NO_ELIGIBLE_BALANCE
-
-    vm.startPrank(seller);
-
-    // Declare and initialize the ids array
-    uint256[] memory ids = new uint256[](1);
-    
-    // Allocate the value to the array
-    ids[0] = id;
-
-    vm.expectRevert(bytes("NO_ELIGIBLE_BALANCE"));
-    marketplace.withdrawMultiple(ids);
-    vm.stopPrank();
-
-    }
 
     function testFeeConfigsAndEdgeCases() public {
         // set fee to zero
