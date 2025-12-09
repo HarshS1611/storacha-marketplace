@@ -1,3 +1,6 @@
+// Prisma schema for Storacha Data Marketplace
+// Aligned with DataMarketplace.sol contract events
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,24 +10,32 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Represents a dataset listing in the marketplace
+/// Synced from ListingCreated events on-chain
 model Listing {
   id            String   @id @default(cuid())
-  onchainId     Int      @unique
-  sellerAddress String
-  dataCID       String
-  spaceDID      String
+  onchainId     Int      @unique                   // Contract listing ID
+  sellerAddress String                             // Ethereum address of seller
+
+  // Content identifiers (Storacha/IPFS)
+  dataCid       String                             // CID of encrypted data blob on Storacha
+  envelopeCid   String                             // CID of envelope JSON on Storacha
+  envelopeHash  String                             // keccak256 hash of envelope (0x... hex string)
+
+  // User-provided metadata (stored off-chain only)
   title         String
   description   String
   category      String
-  priceUsdc     Decimal  @db.Decimal(18, 6)
+  priceUsdc     Decimal  @db.Decimal(18, 6)        // USDC has 6 decimals
   active        Boolean  @default(true)
-  encVersion    String   @default("v1")
-  encAlgorithm  String   @default("AES-256-GCM")
-  encIvLen      Int      @default(12)
-  origFilename  String?
-  contentType   String?
+
+  // Optional metadata from envelope (denormalized for display)
+  origFilename  String?                            // Original filename
+  contentType   String?                            // MIME type
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
   purchases     Purchase[]
 
   @@index([active, category])
@@ -32,41 +43,53 @@ model Listing {
   @@index([createdAt])
 }
 
+/// Represents a purchase transaction
+/// Created when PurchaseCompleted event is detected
 model Purchase {
   id                  String    @id @default(cuid())
   listingId           String
   listing             Listing   @relation(fields: [listingId], references: [id])
-  buyerAddress        String
-  txHash              String    @unique
-  amountUsdc          Decimal   @db.Decimal(18, 6)
-  txVerified          Boolean   @default(false)
-  blockNumber         Int?
-  buyerPublicKey      String?
-  publicKeySignature  String?
-  encryptedKey        String?
+  buyerAddress        String                       // Ethereum address of buyer
+  txHash              String    @unique            // Transaction hash on Base
+  amountUsdc          Decimal   @db.Decimal(18, 6) // Amount paid in USDC
+
+  // On-chain verification status
+  txVerified          Boolean   @default(false)    // True after backend verifies tx receipt
+  blockNumber         Int?                         // Block number for idempotency
+
+  // Buyer public key binding (anti-spoofing)
+  buyerPublicKey      String?                      // RSA public key (JWK string)
+  publicKeySignature  String?                      // Wallet signature proving key ownership
+
+  // Key delivery (encrypted AES key stored on Storacha)
+  keyCid              String?                      // CID of encrypted AES key on Storacha
   keyDelivered        Boolean   @default(false)
   keyDeliveredAt      DateTime?
+
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  @@unique([listingId, buyerAddress])
+  @@unique([listingId, buyerAddress])              // One purchase per buyer per listing
   @@index([buyerAddress])
   @@index([txVerified])
   @@index([keyDelivered])
 }
 
+/// Tracks processed blockchain events for idempotency
+/// Enables reliable event replay and error recovery
 model EventLog {
   id          String   @id @default(cuid())
-  eventType   String
-  txHash      String
-  blockNumber Int
-  logIndex    Int
-  processed   Boolean  @default(false)
-  error       String?
-  data        Json?
+  eventType   String                               // 'ListingCreated', 'PurchaseCompleted', 'Withdrawal'
+  txHash      String                               // Transaction hash
+  blockNumber Int                                  // Block number
+  logIndex    Int                                  // Log index within transaction
+  processed   Boolean  @default(false)             // True after successfully processed
+  error       String?                              // Error message if processing failed
+  data        Json?                                // Raw event data for debugging
+
   createdAt   DateTime @default(now())
 
-  @@unique([txHash, logIndex])
+  @@unique([txHash, logIndex])                     // Prevent duplicate event processing
   @@index([processed])
   @@index([eventType])
   @@index([blockNumber])
