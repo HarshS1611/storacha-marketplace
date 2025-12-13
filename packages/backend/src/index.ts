@@ -11,6 +11,7 @@ import express, {
 import helmet from 'helmet'
 
 import { checkDatabaseHealth, disconnectDatabase } from './config/db.js'
+import { verifyPurchase } from './services/txVerification.js'
 
 const PORT = process.env['BACKEND_PORT'] || 3001
 const CORS_ORIGINS = process.env['CORS_ORIGINS']?.split(',') || [
@@ -45,6 +46,19 @@ app.get('/health', async (_req: Request, res: Response) => {
     },
   })
 })
+
+app.post('/verify', async (req, res) => {
+  const { txHash, expectedListingId, expectedBuyer } = req.body
+
+  const verified = await verifyPurchase(
+    txHash,
+    expectedListingId,
+    expectedBuyer
+  )
+
+  res.json({ data: verified })
+})
+
 
 app.use((_req: Request, res: Response) => {
   res.status(404).json({ error: 'Not found' })
