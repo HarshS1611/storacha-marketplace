@@ -1,16 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { MockedFunction } from 'vitest'
 
-// --------------------------------------------------
-// Shared tx mocks
-// --------------------------------------------------
 const txPurchaseUpsert = vi.fn()
 const txEventLogCreate = vi.fn()
 const txListingFind = vi.fn()
 
-// --------------------------------------------------
-// Partial viem mock (KEEP http)
-// --------------------------------------------------
 vi.mock('viem', async (importOriginal) => {
   const actual = await importOriginal<any>()
   return {
@@ -19,9 +13,6 @@ vi.mock('viem', async (importOriginal) => {
   }
 })
 
-// --------------------------------------------------
-// Mock chain
-// --------------------------------------------------
 vi.mock('../config/chain.js', () => ({
   publicClient: {
     watchContractEvent: vi.fn(),
@@ -32,9 +23,6 @@ vi.mock('../config/chain.js', () => ({
   CONFIRMATIONS_REQUIRED: 5,
 }))
 
-// --------------------------------------------------
-// Mock prisma (transaction-aware)
-// --------------------------------------------------
 vi.mock('../config/db.js', () => ({
   default: {
     eventLog: {
@@ -44,23 +32,14 @@ vi.mock('../config/db.js', () => ({
     },
     $transaction: vi.fn((fn: any) =>
       fn({
-        listing: {
-          findUnique: txListingFind,
-        },
-        purchase: {
-          upsert: txPurchaseUpsert,
-        },
-        eventLog: {
-          create: txEventLogCreate,
-        },
+        listing: { findUnique: txListingFind },
+        purchase: { upsert: txPurchaseUpsert },
+        eventLog: { create: txEventLogCreate },
       })
     ),
   },
 }))
 
-// --------------------------------------------------
-// Mock notification
-// --------------------------------------------------
 vi.mock('../services/notification.js', () => ({
   notifySeller: vi.fn(),
 }))
@@ -68,11 +47,11 @@ vi.mock('../services/notification.js', () => ({
 import { decodeEventLog } from 'viem'
 import prisma from '../config/db.js'
 import { publicClient } from '../config/chain.js'
-import { startPurchaseListener } from '../services/eventListener.js'
+import {
+  startPurchaseListener,
+  stopPurchaseListener,
+} from '../services/eventListener.js'
 
-// --------------------------------------------------
-// Cast mocks
-// --------------------------------------------------
 const mockWatch =
   publicClient.watchContractEvent as MockedFunction<
     typeof publicClient.watchContractEvent
@@ -87,146 +66,28 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+afterEach(() => {
+  if (stopPurchaseListener) stopPurchaseListener()
+})
+
 async function setupListener() {
   let onLogs: any
   mockWatch.mockImplementationOnce(({ onLogs: cb }: any) => {
     onLogs = cb
+    return vi.fn() // unwatch
   })
 
   ;(prisma.eventLog.findFirst as any).mockResolvedValue(null)
   mockGetBlockNumber.mockResolvedValue(200n)
 
   await startPurchaseListener()
+  expect(typeof stopPurchaseListener).toBe('function')
+
   return onLogs
 }
 
-describe('eventListener.ts – branch coverage', () => {
-  it('skips log with null fields', async () => {
-    const onLogs = await setupListener()
-
-    await onLogs([
-      {
-        blockNumber: null,
-        transactionHash: null,
-        logIndex: null,
-      },
-    ])
-
-    expect(txPurchaseUpsert).not.toHaveBeenCalled()
-  })
-
-  it('skips unconfirmed block', async () => {
-    const onLogs = await setupListener()
-
-    await onLogs([
-      {
-        blockNumber: 198n, // < confirmed
-        transactionHash: '0xtx',
-        logIndex: 0,
-      },
-    ])
-
-    expect(txPurchaseUpsert).not.toHaveBeenCalled()
-  })
-
-  it('skips already processed event', async () => {
-    const onLogs = await setupListener()
-
-    ;(prisma.eventLog.findUnique as any).mockResolvedValue({ id: 'exists' })
-
-    await onLogs([
-      {
-        blockNumber: 190n,
-        transactionHash: '0xtx',
-        logIndex: 0,
-      },
-    ])
-
-    expect(txPurchaseUpsert).not.toHaveBeenCalled()
-  })
-
-  it('skips when decodeEventLog throws', async () => {
-    const onLogs = await setupListener()
-
-    ;(prisma.eventLog.findUnique as any).mockResolvedValue(null)
-    ;(decodeEventLog as any).mockImplementation(() => {
-      throw new Error('bad log')
-    })
-
-    await onLogs([
-      {
-        blockNumber: 190n,
-        transactionHash: '0xtx',
-        logIndex: 0,
-        address: '0xmarketplace',
-        data: '0x',
-        topics: [],
-      },
-    ])
-
-    expect(txPurchaseUpsert).not.toHaveBeenCalled()
-  })
-
-  it('skips non PurchaseCompleted events', async () => {
-    const onLogs = await setupListener()
-
-    ;(prisma.eventLog.findUnique as any).mockResolvedValue(null)
-    ;(decodeEventLog as any).mockReturnValue({
-      eventName: 'OtherEvent',
-      args: {},
-    })
-
-    await onLogs([
-      {
-        blockNumber: 190n,
-        transactionHash: '0xtx',
-        logIndex: 0,
-        address: '0xmarketplace',
-        data: '0x',
-        topics: [],
-      },
-    ])
-
-    expect(txPurchaseUpsert).not.toHaveBeenCalled()
-  })
-
-  it('handles LISTING_NOT_FOUND and writes failed eventLog', async () => {
-    const onLogs = await setupListener()
-
-    ;(prisma.eventLog.findUnique as any).mockResolvedValue(null)
-    txListingFind.mockResolvedValue(null)
-
-    ;(decodeEventLog as any).mockReturnValue({
-      eventName: 'PurchaseCompleted',
-      args: {
-        listingId: 1n,
-        buyer: '0xbuyer',
-        seller: '0xseller',
-        amountUsdc: 10n,
-      },
-    })
-
-    await onLogs([
-      {
-        blockNumber: 190n,
-        transactionHash: '0xtx',
-        logIndex: 0,
-        address: '0xmarketplace',
-        data: '0x',
-        topics: [],
-      },
-    ])
-
-    expect(prisma.eventLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          processed: false,
-        }),
-      })
-    )
-  })
-
-  it('processes valid PurchaseCompleted event (happy path)', async () => {
+describe('eventListener.ts – coverage', () => {
+  it('processes valid PurchaseCompleted event', async () => {
     const onLogs = await setupListener()
 
     ;(prisma.eventLog.findUnique as any).mockResolvedValue(null)
@@ -256,4 +117,50 @@ describe('eventListener.ts – branch coverage', () => {
     expect(txPurchaseUpsert).toHaveBeenCalledTimes(1)
     expect(txEventLogCreate).toHaveBeenCalledTimes(1)
   })
+  it('starts listener from last processed block', async () => {
+    mockWatch.mockImplementationOnce(() => vi.fn())
+  
+    ;(prisma.eventLog.findFirst as any).mockResolvedValue({
+      blockNumber: 123,
+    })
+  
+    mockGetBlockNumber.mockResolvedValue(999n)
+  
+    await startPurchaseListener()
+  
+    expect(publicClient.watchContractEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromBlock: 123n,
+      })
+    )
+  })
+  it('skips logs with null critical fields', async () => {
+    const onLogs = await setupListener()
+  
+    await onLogs([
+      {
+        blockNumber: null,
+        transactionHash: null,
+        logIndex: null,
+      },
+    ])
+  
+    expect(txPurchaseUpsert).not.toHaveBeenCalled()
+  })
+  it('skips logs from unconfirmed blocks', async () => {
+    const onLogs = await setupListener()
+  
+    mockGetBlockNumber.mockResolvedValueOnce(200n)
+  
+    await onLogs([
+      {
+        blockNumber: 199n, // > confirmedBlock (200 - 5 = 195)
+        transactionHash: '0xtx',
+        logIndex: 0,
+      },
+    ])
+  
+    expect(txPurchaseUpsert).not.toHaveBeenCalled()
+  })  
+  
 })

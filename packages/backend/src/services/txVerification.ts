@@ -5,7 +5,7 @@ import {
   MARKETPLACE_ADDRESS,
   CONFIRMATIONS_REQUIRED,
 } from '../config/chain.js'
-import { TxVerificationErrorCode, VerifiedPurchase } from '@/types/txVerification.js'
+import { TxVerificationErrorCode, VerifiedPurchase } from '../types/txVerification.js'
 
 /**
  * Custom verification error

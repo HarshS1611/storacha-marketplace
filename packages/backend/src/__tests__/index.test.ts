@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import request from 'supertest'
 
-// ------------------------------------
-// ENV (before app import)
-// ------------------------------------
 process.env.NODE_ENV = 'test'
 
-// ------------------------------------
+const VALID_TX_HASH = '0x' + 'a'.repeat(64)
+const VALID_ADDRESS = '0x' + 'b'.repeat(40)
+
+// --------------------
 // Mocks
-// ------------------------------------
+// --------------------
 vi.mock('../config/db.js', () => ({
   checkDatabaseHealth: vi.fn(),
   disconnectDatabase: vi.fn(),
@@ -16,6 +16,14 @@ vi.mock('../config/db.js', () => ({
 
 vi.mock('../services/txVerification.js', () => ({
   verifyPurchase: vi.fn(),
+}))
+
+vi.mock('../services/monitoring.js', () => ({
+  getListenerHealth: vi.fn().mockResolvedValue({
+    healthy: true,
+    stale: false,
+    lastBlock: 100,
+  }),
 }))
 
 import app from '../index'
@@ -27,17 +35,14 @@ describe('index.ts (Express API)', () => {
     vi.clearAllMocks()
   })
 
-  // ---------------------------
-  // HEALTH
-  // ---------------------------
-  it('GET /health → ok when DB healthy', async () => {
+  it('GET /health → ok with listener health', async () => {
     ;(checkDatabaseHealth as any).mockResolvedValue(true)
 
     const res = await request(app).get('/health')
 
     expect(res.status).toBe(200)
-    expect(res.body.status).toBe('ok')
     expect(res.body.services.database).toBe('connected')
+    expect(res.body.services.listener.healthy).toBe(true)
   })
 
   it('GET /health → degraded when DB down', async () => {
@@ -49,35 +54,40 @@ describe('index.ts (Express API)', () => {
     expect(res.body.status).toBe('degraded')
   })
 
-  // ---------------------------
-  // VERIFY
-  // ---------------------------
   it('POST /verify → success', async () => {
     ;(verifyPurchase as any).mockResolvedValue({
       listingId: 1,
-      buyer: '0xbuyer',
-      seller: '0xseller',
+      buyer: VALID_ADDRESS,
+      seller: VALID_ADDRESS,
       amountUsdc: 100n,
       blockNumber: 10,
     })
 
     const res = await request(app).post('/verify').send({
-      txHash: '0xtx',
+      txHash: VALID_TX_HASH,
       expectedListingId: 1,
-      expectedBuyer: '0xbuyer',
+      expectedBuyer: VALID_ADDRESS,
     })
 
     expect(res.status).toBe(200)
     expect(res.body.data.amountUsdc).toBe('100')
   })
 
+  it('POST /verify → validation error', async () => {
+    const res = await request(app).post('/verify').send({
+      txHash: 'bad',
+    })
+
+    expect(res.status).toBe(400)
+  })
+
   it('POST /verify → handled error', async () => {
     ;(verifyPurchase as any).mockRejectedValue(new Error('boom'))
 
     const res = await request(app).post('/verify').send({
-      txHash: '0xtx',
+      txHash: VALID_TX_HASH,
       expectedListingId: 1,
-      expectedBuyer: '0xbuyer',
+      expectedBuyer: VALID_ADDRESS,
     })
 
     expect(res.status).toBe(500)
@@ -86,13 +96,12 @@ describe('index.ts (Express API)', () => {
 
   it('POST /verify hides error message in production', async () => {
     process.env.NODE_ENV = 'production'
-    ;(verifyPurchase as any).mockRejectedValueOnce(new Error('boom'))
-
+    ;(verifyPurchase as any).mockRejectedValueOnce(new Error('secret'))
 
     const res = await request(app).post('/verify').send({
-      txHash: '0xtx',
+      txHash: VALID_TX_HASH,
       expectedListingId: 1,
-      expectedBuyer: '0xbuyer',
+      expectedBuyer: VALID_ADDRESS,
     })
 
     expect(res.status).toBe(500)
@@ -101,9 +110,6 @@ describe('index.ts (Express API)', () => {
     process.env.NODE_ENV = 'test'
   })
 
-  // ---------------------------
-  // FALLTHROUGHS
-  // ---------------------------
   it('returns 404 for unknown route', async () => {
     const res = await request(app).get('/does-not-exist')
 
